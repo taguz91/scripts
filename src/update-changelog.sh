@@ -5,16 +5,18 @@ set -euo pipefail
 BASE=develop
 BRANCH=docs/changelog
 FILE=CHANGELOG.md
-# Modelos por defecto; se pueden cambiar pasando argumentos (ver --help).
+# Modelo por defecto; se puede cambiar pasando un argumento (ver --help).
 # "claude:<modelo>" o "codex:<modelo>" usan Claude Code / Codex CLI en vez de opencode.
-DEFAULT_MODELS=(opencode/grok-code-fast-1)
+DEFAULT_MODEL=opencode/grok-code-fast-1
 
 usage() {
   cat <<EOF
-Usage: update-changelog [model ...]
+Usage: update-changelog [model]
 
-  With no arguments, uses: ${DEFAULT_MODELS[*]}
-  With arguments, uses those models in the given order (falls back to the next on failure).
+  With no arguments, uses: $DEFAULT_MODEL
+  With an argument, uses that model instead. Only one model is tried per
+  run; if it fails to update $FILE, the local $BRANCH branch is deleted and
+  you'll need to re-run with a different model.
   Accepts a full ID or a fragment: mimo, ling, grok-code-fast-1 ...
   Prefix with claude: or codex: to run via the Claude Code or Codex CLI instead of opencode
   (e.g. claude:haiku, claude:sonnet, codex:gpt-5-codex, or bare "codex" for its default model).
@@ -28,7 +30,7 @@ Usage: update-changelog [model ...]
 Examples:
   update-changelog
   update-changelog mimo
-  update-changelog ling claude:haiku
+  update-changelog claude:haiku
   update-changelog codex:gpt-5-codex
   update-changelog -b main mimo
 EOF
@@ -47,7 +49,7 @@ NO_COMMIT=false
 INTERACTIVE=false
 RETURN_TO=$BASE
 CUSTOM=false
-MODELS=()
+MODEL=$DEFAULT_MODEL
 while (( $# )); do
   case "$1" in
     -h|--help)   usage; exit 0 ;;
@@ -56,11 +58,11 @@ while (( $# )); do
     -i|--interactive) INTERACTIVE=true ;;
     -b|--back)   [[ -n "${2:-}" ]] || { echo "Falta la rama para $1" >&2; exit 1; }
                  RETURN_TO="$2"; shift ;;
-    *)           MODELS+=("$(resolve_model "$1")"); CUSTOM=true ;;
+    *)           $CUSTOM && { echo "Solo se admite un modelo a la vez" >&2; exit 1; }
+                 MODEL="$(resolve_model "$1")"; CUSTOM=true ;;
   esac
   shift
 done
-$CUSTOM || MODELS=("${DEFAULT_MODELS[@]}")
 
 # Vuelve a RETURN_TO al terminar. Si esa rama está abierta en otro worktree
 # (Orca), git no lo permite: en ese caso se queda en docs/changelog.
@@ -78,7 +80,7 @@ delete_and_return() {
     || { echo "No se pudo volver a $RETURN_TO (¿abierta en otro worktree?). Se deja $BRANCH como está."; return; }
   git branch -D "$BRANCH" 2>/dev/null || true
 }
-echo "Modelos: ${MODELS[*]}"
+echo "Modelo: $MODEL"
 
 # Compatible con worktrees: nunca hace checkout de develop, mergea origin/develop
 git fetch origin
@@ -139,16 +141,16 @@ run_model() {
   esac
 }
 
-ok=false
-for m in "${MODELS[@]}"; do
-  echo "→ Probando $m"
-  # No confiamos en el exit code: opencode puede fallar en tareas secundarias
-  # (p. ej. el título de la sesión) aunque la edición sí se haya hecho.
-  run_model "$m" || echo "  ($m terminó con error, revisando si editó el archivo...)"
-  if ! git diff --quiet -- "$FILE"; then ok=true; break; fi
+echo "→ Probando $MODEL"
+# No confiamos en el exit code: opencode puede fallar en tareas secundarias
+# (p. ej. el título de la sesión) aunque la edición sí se haya hecho.
+run_model "$MODEL" || echo "  ($MODEL terminó con error, revisando si editó el archivo...)"
+if git diff --quiet -- "$FILE"; then
   git checkout -- "$FILE" 2>/dev/null || true
-done
-$ok || { echo "Ningún modelo pudo actualizar $FILE"; delete_and_return; exit 1; }
+  echo "$MODEL no pudo actualizar $FILE. Prueba con otro modelo (ver --list/--help)."
+  delete_and_return
+  exit 1
+fi
 
 git add "$FILE"
 git --no-pager diff --cached -- "$FILE"
