@@ -39,6 +39,8 @@ It's only invoked when `git merge` reports conflicts:
    different model.
 4. Otherwise, the resolved files are staged and the merge commit is
    finalized (`git commit --no-edit`), and the script continues as usual.
+   If staging or committing itself fails (e.g. a pre-commit hook rejects
+   it), the same abort-and-delete cleanup runs.
 
 ## Usage
 
@@ -84,8 +86,11 @@ update-changelog -b main mimo
   `origin/develop` into `docs/changelog`, so it's safe to run from a worktree
   that has `develop` checked out elsewhere.
 - When a model is run via opencode, it's restricted to editing files only
-  (`OPENCODE_PERMISSION` denies `bash` and `webfetch`); the Claude Code and
-  Codex CLI invocations are similarly limited to file edits.
+  (`OPENCODE_PERMISSION` denies `bash` and `webfetch`); Claude Code is
+  similarly limited (`--allowedTools "Read,Edit"`). Codex has no equivalent
+  fine-grained permission — `codex exec --full-auto` grants a
+  workspace-write sandbox that can still run shell commands in the repo, so
+  a `codex:` run is not confined to file edits the way the other two are.
 - Only one model is attempted per run; passing more than one positional
   argument is an error.
 - The local `docs/changelog` branch is treated as disposable: if a run

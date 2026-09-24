@@ -147,8 +147,12 @@ Rules:
     delete_and_return
     exit 1
   fi
-  git add -- "${CONFLICT_FILES[@]}"
-  git commit --no-edit
+  if ! { git add -- "${CONFLICT_FILES[@]}" && git commit --no-edit; }; then
+    echo "No se pudo finalizar el commit de merge tras resolver los conflictos."
+    git merge --abort 2>/dev/null || true
+    delete_and_return
+    exit 1
+  fi
 fi
 
 # Solo lo que entró con este merge, sin merges ni commits del propio changelog
