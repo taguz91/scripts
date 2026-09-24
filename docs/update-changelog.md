@@ -9,7 +9,9 @@ format, using an LLM CLI to write the entries.
 1. Fetches `origin` and switches to the `docs/changelog` branch, creating it
    (locally and/or from `origin/develop`) if it doesn't exist yet, locally or
    remotely.
-2. Merges `origin/develop` into it.
+2. Merges `origin/develop` into it. If that merge has conflicts, the model
+   is called (only then) to resolve them — see [Conflict resolution](#conflict-resolution)
+   below.
 3. Collects the non-merge commits that came in with that merge (excluding
    `CHANGELOG.md` itself).
 4. If there's nothing new, deletes the local `docs/changelog` branch and exits.
@@ -21,6 +23,22 @@ format, using an LLM CLI to write the entries.
    with a different model.
 7. Commits and pushes the update to `docs/changelog` (unless `--no-commit`),
    then returns to the starting branch.
+
+## Conflict resolution
+
+The `develop` merge normally applies cleanly, so the model is not involved.
+It's only invoked when `git merge` reports conflicts:
+
+1. The script lists the conflicted files (`git diff --name-only --diff-filter=U`).
+2. It asks the model to resolve the conflict markers (`<<<<<<<`, `=======`,
+   `>>>>>>>`) in just those files, reconciling both sides' intent.
+3. If any conflict markers remain afterward, the merge is aborted
+   (`git merge --abort`), the local `docs/changelog` branch is deleted, and
+   the script exits with an error — re-run once the underlying conflict is
+   easier to resolve (e.g. after `develop` settles down), optionally with a
+   different model.
+4. Otherwise, the resolved files are staged and the merge commit is
+   finalized (`git commit --no-edit`), and the script continues as usual.
 
 ## Usage
 
@@ -71,7 +89,7 @@ update-changelog -b main mimo
 - Only one model is attempted per run; passing more than one positional
   argument is an error.
 - The local `docs/changelog` branch is treated as disposable: if a run
-  produces no changelog content (no new commits, or the model couldn't
-  write anything), it's deleted automatically rather than left around
-  empty. On a failed model attempt, re-run the command with a different
-  model.
+  produces no changelog content (no new commits, the model couldn't
+  write anything, or a merge conflict couldn't be resolved), it's deleted
+  automatically rather than left around empty. On a failed attempt, re-run
+  the command with a different model.

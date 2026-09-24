@@ -98,8 +98,58 @@ if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
   git pull --ff-only origin "$BRANCH"
 fi
 
+# Solo permite editar archivos; nada de bash ni web
+export OPENCODE_PERMISSION='{"edit":"allow","bash":"deny","webfetch":"deny"}'
+
+run_model() {
+  local m="$1" prompt="$2"
+  case "$m" in
+    claude:*)
+      claude --model "${m#claude:}" --permission-mode acceptEdits --allowedTools "Read,Edit" -p "$prompt"
+      ;;
+    codex:*)
+      codex exec --model "${m#codex:}" --full-auto "$prompt"
+      ;;
+    codex)
+      codex exec --full-auto "$prompt"
+      ;;
+    *)
+      opencode run -m "$m" "$prompt"
+      ;;
+  esac
+}
+
 BEFORE=$(git rev-parse HEAD)
-git merge --no-edit "origin/$BASE"
+if ! git merge --no-edit "origin/$BASE"; then
+  mapfile -t CONFLICT_FILES < <(git diff --name-only --diff-filter=U)
+  if (( ${#CONFLICT_FILES[@]} == 0 )); then
+    echo "El merge de origin/$BASE falló y no fue por conflictos; revisa manualmente."
+    git merge --abort 2>/dev/null || true
+    delete_and_return
+    exit 1
+  fi
+
+  echo "Conflictos de merge en: ${CONFLICT_FILES[*]}. Pidiendo a $MODEL que los resuelva..."
+  CONFLICT_PROMPT="Resolve the git merge conflicts in these files (they contain
+<<<<<<<, =======, >>>>>>> markers):
+
+$(printf '%s\n' "${CONFLICT_FILES[@]}")
+
+Rules:
+- Understand the intent of both sides and merge them coherently; don't just blindly pick one side.
+- Remove all conflict markers completely.
+- Do not touch any file that isn't listed above. Do not run commands."
+
+  run_model "$MODEL" "$CONFLICT_PROMPT" || echo "  ($MODEL terminó con error resolviendo conflictos, revisando...)"
+  if git grep -lI '^<<<<<<<' -- "${CONFLICT_FILES[@]}" >/dev/null 2>&1; then
+    echo "$MODEL no pudo resolver los conflictos. Abortando merge."
+    git merge --abort 2>/dev/null || true
+    delete_and_return
+    exit 1
+  fi
+  git add -- "${CONFLICT_FILES[@]}"
+  git commit --no-edit
+fi
 
 # Solo lo que entró con este merge, sin merges ni commits del propio changelog
 COMMITS=$(git log --no-merges --pretty='- %s (%h)' "$BEFORE..HEAD" -- . ":(exclude)$FILE")
@@ -120,31 +170,10 @@ Rules:
 - Write in the same language and style as the existing entries.
 - Do not touch released versions or any other part of the file. Do not run commands."
 
-# Solo permite editar archivos; nada de bash ni web
-export OPENCODE_PERMISSION='{"edit":"allow","bash":"deny","webfetch":"deny"}'
-
-run_model() {
-  local m="$1"
-  case "$m" in
-    claude:*)
-      claude --model "${m#claude:}" --permission-mode acceptEdits --allowedTools "Read,Edit" -p "$PROMPT"
-      ;;
-    codex:*)
-      codex exec --model "${m#codex:}" --full-auto "$PROMPT"
-      ;;
-    codex)
-      codex exec --full-auto "$PROMPT"
-      ;;
-    *)
-      opencode run -m "$m" "$PROMPT"
-      ;;
-  esac
-}
-
 echo "→ Probando $MODEL"
 # No confiamos en el exit code: opencode puede fallar en tareas secundarias
 # (p. ej. el título de la sesión) aunque la edición sí se haya hecho.
-run_model "$MODEL" || echo "  ($MODEL terminó con error, revisando si editó el archivo...)"
+run_model "$MODEL" "$PROMPT" || echo "  ($MODEL terminó con error, revisando si editó el archivo...)"
 if git diff --quiet -- "$FILE"; then
   git checkout -- "$FILE" 2>/dev/null || true
   echo "$MODEL no pudo actualizar $FILE. Prueba con otro modelo (ver --list/--help)."
